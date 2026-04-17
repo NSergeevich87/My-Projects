@@ -8,6 +8,15 @@ RETRY_INTERVAL = 15 * 60
 BACKOFF_INTERVAL = 30 * 60
 
 PROFILE_DIR = str(Path.home() / "chrome-cita-profile")
+LOG_FILE = Path(__file__).parent / "cita_log.txt"
+
+
+def log(message: str):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {message}"
+    print(line)
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 def notify():
@@ -16,6 +25,7 @@ def notify():
     print(f"[{ts}] CITA DISPONIBLE! Открой браузер — страница ждёт.")
     print(f"{'='*50}\n")
     print("\a")
+    log("*** CITA DISPONIBLE ***")
 
 
 async def countdown(seconds: int):
@@ -58,6 +68,8 @@ async def main():
                     print("Нажми Enter чтобы закрыть браузер...")
                     input()
                     break
+
+                log(f"Попытка #{attempt}: cita недоступна{' (ошибка сервера)' if server_error else ''}")
 
                 if server_error and not warmup_done:
                     print("\n" + "="*50)
