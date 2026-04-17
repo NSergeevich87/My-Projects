@@ -1,10 +1,13 @@
 import asyncio
 from datetime import datetime
-from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
+from pathlib import Path
+from patchright.async_api import async_playwright
 from checker import run_check
 
-RETRY_INTERVAL = 15 * 60  # 15 минут
+RETRY_INTERVAL = 15 * 60
+BACKOFF_INTERVAL = 30 * 60
+
+PROFILE_DIR = str(Path.home() / "chrome-cita-profile")
 
 
 def notify():
@@ -12,46 +15,67 @@ def notify():
     print(f"\n{'='*50}")
     print(f"[{ts}] CITA DISPONIBLE! Открой браузер — страница ждёт.")
     print(f"{'='*50}\n")
-    print("\a")  # системный звуковой сигнал
+    print("\a")
+
+
+async def countdown(seconds: int):
+    for remaining in range(seconds, 0, -60):
+        mins = remaining // 60
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] Следующая попытка через {mins} мин...")
+        await asyncio.sleep(min(60, remaining))
 
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir=PROFILE_DIR,
+            channel="chrome",
             headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
             viewport={"width": 1280, "height": 800},
             locale="es-ES",
+            extra_http_headers={
+                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            },
         )
         page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
-
+        warmup_done = False
         attempt = 1
-        while True:
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts}] Попытка #{attempt}...")
 
-            available = await run_check(page)
-
-            if available:
-                notify()
-                print("Нажми Enter чтобы закрыть браузер...")
-                input()
-                break
-            else:
+        try:
+            while True:
                 ts = datetime.now().strftime("%H:%M:%S")
-                print(f"[{ts}] Cita недоступна. Следующая попытка через 10 минут.")
-                attempt += 1
-                await asyncio.sleep(RETRY_INTERVAL)
+                print(f"[{ts}] Попытка #{attempt}...")
 
-        await browser.close()
+                available, server_error = False, False
+                try:
+                    available, server_error = await run_check(page)
+                except Exception as e:
+                    print(f"[ERROR] {e}")
+
+                if available:
+                    notify()
+                    print("Нажми Enter чтобы закрыть браузер...")
+                    input()
+                    break
+
+                if server_error and not warmup_done:
+                    print("\n" + "="*50)
+                    print("WAF заблокировал — открываю стартовую страницу.")
+                    print("Пройди форму ВРУЧНУЮ один раз в этом окне.")
+                    print("Когда закончишь — нажми Enter здесь.")
+                    print("="*50)
+                    await page.goto("https://icp.administracionelectronica.gob.es/icpplustieb/index", timeout=30_000)
+                    input()
+                    warmup_done = True
+                    attempt += 1
+                    continue
+
+                interval = BACKOFF_INTERVAL if server_error else RETRY_INTERVAL
+                await countdown(interval)
+                attempt += 1
+        finally:
+            await context.close()
 
 
 if __name__ == "__main__":
