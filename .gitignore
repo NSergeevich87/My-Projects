@@ -36,6 +36,7 @@ secrets/
 Thumbs.db
 
 # Logs
+cita_log.txt
 *.log
 logs/
 npm-debug.log*
